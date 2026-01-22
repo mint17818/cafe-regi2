@@ -1,0 +1,173 @@
+<!DOCTYPE html>
+<html lang="ja">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
+    <title>iPadカメラレジ</title>
+    <script src="https://unpkg.com/html5-qrcode"></script>
+    <style>
+        :root {
+            --bg-color: #f0f2f5;
+            --accent-color: #3498db;
+            --danger-color: #e74c3c;
+        }
+        body { font-family: sans-serif; margin: 0; background: var(--bg-color); height: 100vh; overflow: hidden; }
+        
+        /* 全体のレイアウト設定 */
+        .container { display: flex; height: 100vh; }
+
+        /* 左側：スキャンエリア */
+        .left-panel {
+            flex: 1; border-right: 2px solid #ddd;
+            display: flex; flex-direction: column; align-items: center; justify-content: center;
+            background: #000; color: white; position: relative;
+        }
+        #reader { width: 100% !important; height: 100% !important; }
+        
+        /* 読み取り結果のポップアップ（左パネル内に重ねる） */
+        #result-overlay {
+            position: absolute; top: 0; left: 0; width: 100%; height: 100%;
+            background: rgba(255,255,255,0.95); color: #333;
+            display: none; flex-direction: column; align-items: center; justify-content: center;
+            z-index: 10;
+        }
+
+        /* 右側：カートエリア */
+        .right-panel {
+            width: 350px; background: white; display: flex; flex-direction: column;
+            padding: 20px; box-shadow: -2px 0 5px rgba(0,0,0,0.1);
+        }
+
+        .price-large { font-size: 3em; color: var(--danger-color); font-weight: bold; margin: 10px 0; }
+        
+        #cart-list { flex-grow: 1; overflow-y: auto; border-top: 1px solid #eee; margin-top: 10px; }
+        .cart-item { display: flex; justify-content: space-between; padding: 12px 0; border-bottom: 1px solid #eee; font-size: 1.1em; }
+        
+        .total-section { border-top: 3px solid #333; padding-top: 15px; margin-top: 10px; }
+        .total-price { font-size: 2em; font-weight: bold; text-align: right; }
+
+        button { 
+            padding: 15px 25px; border-radius: 8px; border: none; font-size: 1.1em; 
+            cursor: pointer; transition: 0.2s;
+        }
+        .btn-main { background: var(--accent-color); color: white; width: 100%; }
+        .btn-clear { background: #95a5a6; color: white; width: 100%; margin-top: 10px; }
+        
+        /* 初期開始画面 */
+        #setup-screen {
+            position: fixed; inset: 0; background: white; z-index: 100;
+            display: flex; flex-direction: column; align-items: center; justify-content: center;
+        }
+    </style>
+</head>
+<body>
+
+    <div id="setup-screen">
+        <h1>カメラレジを起動</h1>
+        <button class="btn-main" style="width: 200px;" onclick="initSystem()">開始する</button>
+    </div>
+
+    <div class="container">
+        <div class="left-panel">
+            <div id="reader"></div>
+            
+            <div id="result-overlay">
+                <h2 id="item-name">商品名</h2>
+                <p class="price-large"><span id="item-price">0</span>円</p>
+                <button class="btn-main" style="width: 250px;" onclick="resumeScanning()">次をスキャン</button>
+            </div>
+        </div>
+
+        <div class="right-panel">
+            <h2>ショッピングカート</h2>
+            <div id="cart-list">
+                <p style="color: #999; text-align: center; margin-top: 50px;">商品をスキャンしてください</p>
+            </div>
+            
+            <div class="total-section">
+                <div style="font-size: 0.9em; color: #666;">合計金額</div>
+                <div class="total-price"><span id="total-amount">0</span>円</div>
+                <button class="btn-clear" onclick="clearCart()">カートをリセット</button>
+            </div>
+        </div>
+    </div>
+
+    <script>
+        const itemMaster = {
+            "A001": { name: "リンゴ", price: 150 },
+            "A002": { name: "バナナ", price: 100 },
+            "A003": { name: "コーヒー", price: 120 }
+        };
+
+        let cart = [];
+        let html5QrCode;
+
+        function beep() {
+            const ctx = new (window.AudioContext || window.webkitAudioContext)();
+            const osc = ctx.createOscillator();
+            osc.frequency.setValueAtTime(1000, ctx.currentTime);
+            osc.connect(ctx.destination);
+            osc.start(); osc.stop(ctx.currentTime + 0.1);
+        }
+
+        async function initSystem() {
+            document.getElementById("setup-screen").style.display = "none";
+            html5QrCode = new Html5Qrcode("reader");
+            startCamera();
+        }
+
+        function startCamera() {
+            const config = { fps: 15, qrbox: { width: 280, height: 280 } };
+            html5QrCode.start({ facingMode: "environment" }, config, (decodedText) => {
+                const item = itemMaster[decodedText];
+                if (item) {
+                    beep();
+                    addToCart(item);
+                    showOverlay(item);
+                }
+            });
+        }
+
+        function showOverlay(item) {
+            html5QrCode.pause(); // 読み取りを一旦止める
+            document.getElementById("item-name").innerText = item.name;
+            document.getElementById("item-price").innerText = item.price;
+            document.getElementById("result-overlay").style.display = "flex";
+        }
+
+        function resumeScanning() {
+            document.getElementById("result-overlay").style.display = "none";
+            html5QrCode.resume();
+        }
+
+        function addToCart(item) {
+            cart.push(item);
+            updateDisplay();
+        }
+
+        function updateDisplay() {
+            const list = document.getElementById("cart-list");
+            list.innerHTML = "";
+            let total = 0;
+            
+            // カート内を逆順で表示（新しいものが上）
+            [...cart].reverse().forEach(item => {
+                const div = document.createElement("div");
+                div.className = "cart-item";
+                div.innerHTML = `<span>${item.name}</span><strong>${item.price}円</strong>`;
+                list.appendChild(div);
+                total += item.price;
+            });
+            document.getElementById("total-amount").innerText = total.toLocaleString();
+        }
+
+        function clearCart() {
+            if(confirm("カートを空にしますか？")) {
+                cart = [];
+                updateDisplay();
+                document.getElementById("cart-list").innerHTML = '<p style="color: #999; text-align: center; margin-top: 50px;">商品をスキャンしてください</p>';
+            }
+        }
+    </script>
+</body>
+</html>
